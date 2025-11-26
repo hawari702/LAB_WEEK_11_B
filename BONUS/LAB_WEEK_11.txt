@@ -1,0 +1,142 @@
+Rio Hawari Putra Hakim - 00000109470
+(IF570-AL) Mobile Application Programming - LAB
+1. When a user takes a picture, that picture is stored in a path based on the given 
+URI. In which part of the code handles this? (Copy that part of the code as the 
+answer) 
+answer : 
+private fun openImageCapture() {
+    photoInfo = providerFileManager.generatePhotoUri(System.currentTimeMillis())
+
+    photoInfo?.uri?.let { uri ->
+        takePictureLauncher.launch(uri)
+    }
+}
+
+2. In your FileInfo.kt, there are 5 attributes. On the first attribute, what does the URI 
+refer to? And on the fourth attribute, what does relativePath refer to? 
+answer :
+data class FileInfo(
+    val uri: Uri,          
+    val file: File,
+    val name: String,
+    val relativePath:String, 
+    val mimeType:String
+1. uri: Uri (atribut pertama)
+- Ini adalah content:// URI dari FileProvider yang menunjuk ke file fisik di folder private app (getExternalFilesDir(...)).
+- URI ini:
+Dipakai saat memanggil kamera: takePictureLauncher.launch(uri) → kamera akan menulis foto ke file yang diwakili URI ini.
+Dipakai lagi sebagai sumber saat kita baca isinya di contentResolver.openInputStream(fileInfo.uri) untuk disalin ke MediaStore.
+2. relativePath: String (atribut keempat)
+- Ini adalah nama folder relatif di penyimpanan bersama (MediaStore) tempat file akan disimpan, misalnya:
+Untuk foto: Environment.DIRECTORY_PICTURES
+Untuk video: Environment.DIRECTORY_MOVIES
+- Nilai ini dimasukkan ke MediaStore.Images.Media.RELATIVE_PATH / MediaStore.Video.Media.RELATIVE_PATH, jadi menentukan di folder apa file muncul (misal “Pictures/” atau “Movies/” di storage).
+3. [Bonus] Explain the chronological order from when a user takes a picture until 
+the file is stored in the MediaStore. 
+1. User menekan tombol foto
+findViewById<Button>(R.id.photo_button).setOnClickListener {
+    isCapturingVideo = false
+    checkStoragePermission {
+        openImageCapture()
+    }
+}
+
+- Cek permission dulu (untuk Android < Q).
+- Kalau izin OK, fungsi openImageCapture() dipanggil.
+
+
+2. App menyiapkan file + URI sementara untuk kamera
+private fun openImageCapture() {
+    photoInfo = providerFileManager.generatePhotoUri(System.currentTimeMillis())
+
+    photoInfo?.uri?.let { uri ->
+        takePictureLauncher.launch(uri)
+    }
+}
+
+- Di dalam generatePhotoUri():
+fun generatePhotoUri(time: Long): FileInfo {
+    val name = "img_$time.jpg"
+    val folder = getPicturesFolder() // Environment.DIRECTORY_PICTURES
+
+    val file = File(
+        context.getExternalFilesDir(folder),
+        name
+    )
+
+    return FileInfo(
+        fileHelper.getUriFromFile(file), // URI FileProvider
+        file,
+        name,
+        folder,
+        "image/jpeg"
+    )
+}
+- Dibuat nama file (img_...jpg).
+- Dibuat File di getExternalFilesDir(Pictures).
+- Dibuat Uri lewat FileHelper.getUriFromFile(file).
+- Semua dikemas ke FileInfo → disimpan di photoInfo.
+- Lalu takePictureLauncher.launch(uri) memerintahkan kamera menyimpan ke URI tersebut.
+
+3. Kamera terbuka dan menyimpan foto ke file sementara
+- User mengambil foto.
+- Kamera menulis data foto ke file yang diwakili oleh photoInfo.uri.
+
+4. Setelah foto berhasil, callback launcher dipanggil
+takePictureLauncher =
+    registerForActivityResult(ActivityResultContracts.TakePicture()) {
+        // setelah foto diambil, simpan ke MediaStore
+        providerFileManager.insertImageToStore(photoInfo)
+    }
+
+- Setelah kamera selesai, callback ini jalan.
+- App memanggil insertImageToStore(photoInfo).
+
+5. Menyiapkan data untuk MediaStore
+fun insertImageToStore(fileInfo: FileInfo?) {
+    fileInfo?.let { info ->
+        insertToStore(
+            info,
+            mediaContentHelper.getImageContentUri(),              // Images URI
+            mediaContentHelper.generateImageContentValues(info)   // DISPLAY_NAME, MIME_TYPE, RELATIVE_PATH
+        )
+    }
+}
+
+6.Membuat entry di MediaStore dan menyalin data file
+private fun insertToStore(
+    fileInfo: FileInfo,
+    contentUri: Uri,
+    contentValues: ContentValues
+) {
+    executor.execute {
+        val insertedUri = contentResolver.insert(contentUri, contentValues)
+
+        insertedUri?.let { uri ->
+            val input = contentResolver.openInputStream(fileInfo.uri)
+            val output = contentResolver.openOutputStream(uri)
+
+            input?.use { inputStream ->
+                output?.use { outputStream ->
+                    val buffer = ByteArray(8 * 1024)
+                    var bytesRead: Int
+                    while (true) {
+                        bytesRead = inputStream.read(buffer)
+                        if (bytesRead == -1) break
+                        outputStream.write(buffer, 0, bytesRead)
+                    }
+                }
+            }
+        }
+    }
+}
+
+- contentResolver.insert(...) membuat entry baru di MediaStore, di folder relativePath (mis. Pictures/) dengan nama file DISPLAY_NAME.
+Lalu:
+- openInputStream(fileInfo.uri) → baca dari file sementara (folder private app).
+- openOutputStream(insertedUri) → tulis ke lokasi MediaStore.
+- Loop copy byte sampai selesai.
+
+7. Hasil akhir
+- Foto sekarang tersimpan di MediaStore pada folder Pictures/ (atau sesuai relativePath).
+- Bisa muncul di aplikasi Galeri karena sudah tercatat di MediaStore.
